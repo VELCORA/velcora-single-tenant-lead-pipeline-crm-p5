@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { store } from '@/lib/store';
+import { STAGES, isValidEmail, scoreLead, priorityFromScore, initials, formatTime, formatEyebrow } from '@/lib/logic';
 
 type Stage = 'new' | 'qualified' | 'proposal' | 'won' | 'lost';
 type Priority = 'hot' | 'warm' | 'cold';
@@ -55,16 +56,9 @@ type Notification = {
 type Activity = { id: string; lead_id: string; type: string; content: string; created_at: string };
 type Tab = 'overview' | 'pipeline' | 'intake';
 
-const stages: { key: Stage; label: string; color: string }[] = [
-  { key: 'new', label: 'New leads', color: 'blue' },
-  { key: 'qualified', label: 'Qualified', color: 'amber' },
-  { key: 'proposal', label: 'Proposal', color: 'violet' },
-  { key: 'won', label: 'Won', color: 'emerald' },
-];
+const stages = STAGES;
 
-const formatTime = (value: string) => new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
-const formatEyebrow = () => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date()).toUpperCase();
-const initials = (name: string) => name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase();
+
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
@@ -176,11 +170,17 @@ function Intake({ onCreated, compact = false }: { onCreated: (id: string) => Pro
   const change = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setFormError('');
+    const name = form.name.trim();
     const email = form.email.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setFormError('Please enter a valid work email.'); setSaving(false); return; }
-    const cleaned = { ...form, name: form.name.trim(), email, company: form.company.trim(), role: form.role.trim(), phone: form.phone.trim(), message: form.message.trim().slice(0, 2000) };
-    const score = Math.min(98, 42 + (cleaned.company ? 18 : 0) + (cleaned.role ? 12 : 0) + (cleaned.message.length > 40 ? 16 : 0) + (cleaned.phone ? 10 : 0));
-    const priority: Priority = score >= 75 ? 'hot' : score >= 55 ? 'warm' : 'cold';
+    const company = form.company.trim();
+    if (!name) { setFormError('Please enter the lead’s full name.'); setSaving(false); return; }
+    if (!company) { setFormError('Please enter a company name.'); setSaving(false); return; }
+    if (!isValidEmail(email)) { setFormError('Please enter a valid work email.'); setSaving(false); return; }
+    const duplicate = store.getLeads().find((lead) => lead.email.toLowerCase() === email.toLowerCase());
+    if (duplicate) { setFormError('A lead with this email already exists.'); setSaving(false); return; }
+    const cleaned = { ...form, name, email, company, role: form.role.trim(), phone: form.phone.trim(), message: form.message.trim().slice(0, 2000) };
+    const score = scoreLead(cleaned);
+    const priority = priorityFromScore(score);
     const now = new Date().toISOString();
     const leadId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
     store.addLead({ id: leadId, ...cleaned, stage: 'new', score, priority, owner: '', email_status: 'queued', last_contacted_at: null, created_at: now, updated_at: now, next_follow_up_at: new Date(Date.now() + 86400000).toISOString() });
