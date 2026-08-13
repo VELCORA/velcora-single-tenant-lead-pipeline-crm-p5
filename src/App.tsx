@@ -20,7 +20,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 type Stage = 'new' | 'qualified' | 'proposal' | 'won' | 'lost';
 type Priority = 'hot' | 'warm' | 'cold';
@@ -86,6 +86,13 @@ function App() {
   const winRate = leads.length ? Math.round((leads.filter((lead) => lead.stage === 'won').length / leads.length) * 100) : 0;
 
   const refresh = async () => {
+    if (!isSupabaseConfigured) {
+      setLeads([]);
+      setNotifications([]);
+      setActivities([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const [leadResult, notificationResult, activityResult] = await Promise.all([
       supabase.from('leads').select('*').order('created_at', { ascending: false }),
@@ -107,6 +114,7 @@ function App() {
   };
 
   const updateStage = async (lead: Lead, stage: Stage) => {
+    if (!isSupabaseConfigured) { notify('Connect a database to move leads.'); return; }
     const { error: updateError } = await supabase.from('leads').update({ stage, updated_at: new Date().toISOString() }).eq('id', lead.id);
     if (updateError) { setError('That stage change could not be saved.'); return; }
     await supabase.from('lead_activities').insert({ lead_id: lead.id, type: 'stage_change', content: `Moved from ${lead.stage} to ${stage}` });
@@ -116,6 +124,7 @@ function App() {
   };
 
   const addNote = async (lead: Lead, note: string) => {
+    if (!isSupabaseConfigured) { notify('Connect a database to add notes.'); return; }
     if (!note.trim()) return;
     const { error: noteError } = await supabase.from('lead_activities').insert({ lead_id: lead.id, type: 'note', content: note.trim() });
     if (noteError) { setError('The note could not be saved.'); return; }
@@ -125,6 +134,7 @@ function App() {
 
   const openEmail = async (lead: Lead) => {
     window.location.href = `mailto:${lead.email}?subject=${encodeURIComponent(`Following up with ${lead.company}`)}&body=${encodeURIComponent(`Hi ${lead.name.split(' ')[0]},\n\nThanks for reaching out. I would love to continue the conversation.\n\nBest,\nThe Velgora team`)}`;
+    if (!isSupabaseConfigured) { notify('Connect a database to track this follow-up.'); return; }
     await supabase.from('leads').update({ email_status: 'sent', last_contacted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', lead.id);
     await supabase.from('lead_activities').insert({ lead_id: lead.id, type: 'email', content: `Follow-up email drafted for ${lead.email}` });
     await supabase.from('notifications').insert({ lead_id: lead.id, type: 'email', title: 'Follow-up ready', content: `Email draft created for ${lead.name}.` });
@@ -132,6 +142,7 @@ function App() {
   };
 
   const markNotificationsRead = async () => {
+    if (!isSupabaseConfigured) return;
     if (!unreadCount) return;
     await supabase.from('notifications').update({ is_read: true }).eq('is_read', false);
     setNotifications((current) => current.map((notification) => ({ ...notification, is_read: true })));
@@ -150,6 +161,11 @@ function App() {
         <div className="sidebar-bottom"><div className="live-indicator"><span /> Live workspace</div><p>Capture demand, qualify conversations, and keep every follow-up moving.</p><div className="profile"><div className="avatar small">JD</div><div><strong>Jordan Davis</strong><span>Sales owner</span></div><MoreHorizontal size={17} /></div></div>
       </aside>
       <main className="main-content">
+        {!isSupabaseConfigured && (
+          <div className="config-banner">
+            <span><strong>Database not connected.</strong> Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in your Vercel project settings, then redeploy to load your leads.</span>
+          </div>
+        )}
         <header className="topbar"><div className="mobile-brand"><img src="/assets/logo.png" alt="" /> velgora</div><div className="breadcrumbs"><span>Workspace</span><b>/</b><strong>{activeTab === 'overview' ? 'Overview' : activeTab === 'pipeline' ? 'Pipeline' : 'Lead intake'}</strong></div><div className="top-actions"><div className="search-box"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search leads..." /><kbd>⌘ K</kbd></div><button className="icon-button" onClick={() => { setShowNotifications((open) => !open); void markNotificationsRead(); }} aria-label="Notifications"><Bell size={18} />{unreadCount > 0 && <span className="notification-dot">{unreadCount}</span>}</button><button className="primary-button compact" onClick={() => setShowNewLead(true)}><Plus size={16} /> New lead</button></div></header>
         {showNotifications && <div className="notification-popover"><div className="popover-heading"><strong>Notifications</strong><button onClick={() => setShowNotifications(false)}><X size={16} /></button></div>{notifications.length === 0 ? <div className="empty-mini">No activity yet.</div> : notifications.slice(0, 5).map((notification) => <div className="notification-row" key={notification.id}><div className={`notification-icon ${notification.type}`}><Bell size={14} /></div><div><strong>{notification.title}</strong><p>{notification.content}</p><span>{formatTime(notification.created_at)}</span></div></div>)}</div>}
         {error && <div className="error-banner">{error}<button onClick={() => setError('')}><X size={15} /></button></div>}
@@ -191,6 +207,7 @@ function Intake({ onCreated, compact = false }: { onCreated: (id: string) => Pro
     const cleaned = { ...form, name: form.name.trim(), email, company: form.company.trim(), role: form.role.trim(), phone: form.phone.trim(), message: form.message.trim().slice(0, 2000) };
     const score = Math.min(98, 42 + (cleaned.company ? 18 : 0) + (cleaned.role ? 12 : 0) + (cleaned.message.length > 40 ? 16 : 0) + (cleaned.phone ? 10 : 0));
     const priority: Priority = score >= 75 ? 'hot' : score >= 55 ? 'warm' : 'cold';
+    if (!isSupabaseConfigured) { setFormError('Connect a database to save leads.'); setSaving(false); return; }
     const { data, error: insertError } = await supabase.from('leads').insert({ ...cleaned, score, priority, email_status: 'queued', next_follow_up_at: new Date(Date.now() + 86400000).toISOString() }).select('id').maybeSingle();
     if (insertError || !data) { setFormError('This lead could not be saved. Please check the details and try again.'); setSaving(false); return; }
     await supabase.from('lead_activities').insert({ lead_id: data.id, type: 'created', content: `Lead captured from ${cleaned.source}` });
