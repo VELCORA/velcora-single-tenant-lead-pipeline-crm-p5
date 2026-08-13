@@ -1,4 +1,4 @@
-# Velgora — Single-tenant Lead Pipeline CRM
+# Velcora — Single-tenant Lead Pipeline CRM
 
 A clean, production-shaped lead pipeline CRM: capture demand, auto-qualify
 leads with a 0–100 score (hot / warm / cold), and move them through a

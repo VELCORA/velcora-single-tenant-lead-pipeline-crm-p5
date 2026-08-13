@@ -20,7 +20,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { store } from '@/lib/store';
 
 type Stage = 'new' | 'qualified' | 'proposal' | 'won' | 'lost';
 type Priority = 'hot' | 'warm' | 'cold';
@@ -77,7 +77,6 @@ function App() {
   const [showNewLead, setShowNewLead] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState('');
-  const [error, setError] = useState('');
 
   const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? null;
   const unreadCount = notifications.filter((notification) => !notification.is_read).length;
@@ -85,24 +84,10 @@ function App() {
   const qualifiedCount = leads.filter((lead) => lead.stage === 'qualified' || lead.stage === 'proposal').length;
   const winRate = leads.length ? Math.round((leads.filter((lead) => lead.stage === 'won').length / leads.length) * 100) : 0;
 
-  const refresh = async () => {
-    if (!isSupabaseConfigured) {
-      setLeads([]);
-      setNotifications([]);
-      setActivities([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    const [leadResult, notificationResult, activityResult] = await Promise.all([
-      supabase.from('leads').select('*').order('created_at', { ascending: false }),
-      supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(12),
-      supabase.from('lead_activities').select('*').order('created_at', { ascending: false }),
-    ]);
-    if (leadResult.error || notificationResult.error || activityResult.error) setError('We could not load the workspace. Please refresh and try again.');
-    setLeads((leadResult.data as Lead[]) ?? []);
-    setNotifications((notificationResult.data as Notification[]) ?? []);
-    setActivities((activityResult.data as Activity[]) ?? []);
+  const refresh = () => {
+    setLeads(store.getLeads());
+    setNotifications(store.getNotifications());
+    setActivities(store.getActivities());
     setLoading(false);
   };
 
@@ -114,61 +99,50 @@ function App() {
   };
 
   const updateStage = async (lead: Lead, stage: Stage) => {
-    if (!isSupabaseConfigured) { notify('Connect a database to move leads.'); return; }
-    const { error: updateError } = await supabase.from('leads').update({ stage, updated_at: new Date().toISOString() }).eq('id', lead.id);
-    if (updateError) { setError('That stage change could not be saved.'); return; }
-    await supabase.from('lead_activities').insert({ lead_id: lead.id, type: 'stage_change', content: `Moved from ${lead.stage} to ${stage}` });
-    await supabase.from('notifications').insert({ lead_id: lead.id, type: 'stage_change', title: 'Pipeline updated', content: `${lead.name} is now in ${stage}.` });
-    await refresh();
+    store.updateLead(lead.id, { stage, updated_at: new Date().toISOString() });
+    store.addActivity({ lead_id: lead.id, type: 'stage_change', content: `Moved from ${lead.stage} to ${stage}` });
+    store.addNotification({ lead_id: lead.id, type: 'stage_change', title: 'Pipeline updated', content: `${lead.name} is now in ${stage}.`, is_read: false });
+    refresh();
     notify(`Moved ${lead.name} to ${stage}.`);
   };
 
   const addNote = async (lead: Lead, note: string) => {
-    if (!isSupabaseConfigured) { notify('Connect a database to add notes.'); return; }
     if (!note.trim()) return;
-    const { error: noteError } = await supabase.from('lead_activities').insert({ lead_id: lead.id, type: 'note', content: note.trim() });
-    if (noteError) { setError('The note could not be saved.'); return; }
-    await refresh();
+    store.addActivity({ lead_id: lead.id, type: 'note', content: note.trim() });
+    refresh();
     notify('Note added to the timeline.');
   };
 
   const openEmail = async (lead: Lead) => {
-    window.location.href = `mailto:${lead.email}?subject=${encodeURIComponent(`Following up with ${lead.company}`)}&body=${encodeURIComponent(`Hi ${lead.name.split(' ')[0]},\n\nThanks for reaching out. I would love to continue the conversation.\n\nBest,\nThe Velgora team`)}`;
-    if (!isSupabaseConfigured) { notify('Connect a database to track this follow-up.'); return; }
-    await supabase.from('leads').update({ email_status: 'sent', last_contacted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', lead.id);
-    await supabase.from('lead_activities').insert({ lead_id: lead.id, type: 'email', content: `Follow-up email drafted for ${lead.email}` });
-    await supabase.from('notifications').insert({ lead_id: lead.id, type: 'email', title: 'Follow-up ready', content: `Email draft created for ${lead.name}.` });
-    await refresh();
+    window.location.href = `mailto:${lead.email}?subject=${encodeURIComponent(`Following up with ${lead.company}`)}&body=${encodeURIComponent(`Hi ${lead.name.split(' ')[0]},\n\nThanks for reaching out. I would love to continue the conversation.\n\nBest,\nThe Velcora team`)}`;
+    store.updateLead(lead.id, { email_status: 'sent', last_contacted_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    store.addActivity({ lead_id: lead.id, type: 'email', content: `Follow-up email drafted for ${lead.email}` });
+    store.addNotification({ lead_id: lead.id, type: 'email', title: 'Follow-up ready', content: `Email draft created for ${lead.name}.`, is_read: false });
+    refresh();
   };
 
   const markNotificationsRead = async () => {
-    if (!isSupabaseConfigured) return;
     if (!unreadCount) return;
-    await supabase.from('notifications').update({ is_read: true }).eq('is_read', false);
+    store.markAllRead();
     setNotifications((current) => current.map((notification) => ({ ...notification, is_read: true })));
   };
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><img src="/assets/logo.png" alt="Velgora logo" /><div><strong>velgora</strong><span>Lead operations</span></div></div>
+        <div className="brand"><img src="/assets/logo.png" alt="Velcora logo" /><div><strong>velcora</strong><span>Lead operations</span></div></div>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="nav-list">
           <button className={activeTab === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveTab('overview')}><Command size={17} /> Overview</button>
           <button className={activeTab === 'pipeline' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveTab('pipeline')}><Target size={17} /> Pipeline <span className="nav-count">{leads.length}</span></button>
           <button className={activeTab === 'intake' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveTab('intake')}><Plus size={17} /> Add a lead</button>
         </nav>
-        <div className="sidebar-bottom"><div className="live-indicator"><span /> Live workspace</div><p>Capture demand, qualify conversations, and keep every follow-up moving.</p><div className="profile"><div className="avatar small">JD</div><div><strong>Jordan Davis</strong><span>Sales owner</span></div><MoreHorizontal size={17} /></div></div>
+        <div className="sidebar-bottom"><div className="live-indicator"><span /> Live workspace</div><p>Capture demand, qualify conversations, and keep every follow-up moving.</p><div className="profile"><div className="avatar small">V</div><div><strong>Velcora</strong><span>Your workspace</span></div><MoreHorizontal size={17} /></div></div>
       </aside>
       <main className="main-content">
-        {!isSupabaseConfigured && (
-          <div className="config-banner">
-            <span><strong>Database not connected.</strong> Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in your Vercel project settings, then redeploy to load your leads.</span>
-          </div>
-        )}
-        <header className="topbar"><div className="mobile-brand"><img src="/assets/logo.png" alt="" /> velgora</div><div className="breadcrumbs"><span>Workspace</span><b>/</b><strong>{activeTab === 'overview' ? 'Overview' : activeTab === 'pipeline' ? 'Pipeline' : 'Lead intake'}</strong></div><div className="top-actions"><div className="search-box"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search leads..." /><kbd>⌘ K</kbd></div><button className="icon-button" onClick={() => { setShowNotifications((open) => !open); void markNotificationsRead(); }} aria-label="Notifications"><Bell size={18} />{unreadCount > 0 && <span className="notification-dot">{unreadCount}</span>}</button><button className="primary-button compact" onClick={() => setShowNewLead(true)}><Plus size={16} /> New lead</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><img src="/assets/logo.png" alt="" /> velcora</div><div className="breadcrumbs"><span>Workspace</span><b>/</b><strong>{activeTab === 'overview' ? 'Overview' : activeTab === 'pipeline' ? 'Pipeline' : 'Lead intake'}</strong></div><div className="top-actions"><div className="search-box"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search leads..." /><kbd>⌘ K</kbd></div><button className="icon-button" onClick={() => { setShowNotifications((open) => !open); void markNotificationsRead(); }} aria-label="Notifications"><Bell size={18} />{unreadCount > 0 && <span className="notification-dot">{unreadCount}</span>}</button><button className="primary-button compact" onClick={() => setShowNewLead(true)}><Plus size={16} /> New lead</button></div></header>
         {showNotifications && <div className="notification-popover"><div className="popover-heading"><strong>Notifications</strong><button onClick={() => setShowNotifications(false)}><X size={16} /></button></div>{notifications.length === 0 ? <div className="empty-mini">No activity yet.</div> : notifications.slice(0, 5).map((notification) => <div className="notification-row" key={notification.id}><div className={`notification-icon ${notification.type}`}><Bell size={14} /></div><div><strong>{notification.title}</strong><p>{notification.content}</p><span>{formatTime(notification.created_at)}</span></div></div>)}</div>}
-        {error && <div className="error-banner">{error}<button onClick={() => setError('')}><X size={15} /></button></div>}
+
         {activeTab === 'overview' && <Overview leads={leads} qualifiedCount={qualifiedCount} winRate={winRate} loading={loading} onSelect={(id) => { setSelectedLeadId(id); setActiveTab('pipeline'); }} onAdd={() => setShowNewLead(true)} />}
         {activeTab === 'pipeline' && <Pipeline leads={filteredLeads} selectedLead={selectedLead} activities={activities} search={search} onSelect={setSelectedLeadId} onStage={updateStage} onEmail={openEmail} onNote={addNote} />}
         {activeTab === 'intake' && <Intake onCreated={async (id) => { await refresh(); setSelectedLeadId(id); setActiveTab('pipeline'); notify('Lead captured and added to the pipeline.'); }} />}
@@ -182,7 +156,7 @@ function App() {
 function Overview({ leads, qualifiedCount, winRate, loading, onSelect, onAdd }: { leads: Lead[]; qualifiedCount: number; winRate: number; loading: boolean; onSelect: (id: string) => void; onAdd: () => void }) {
   const recentLeads = leads.slice(0, 5);
   const hotLeads = leads.filter((lead) => lead.priority === 'hot');
-  return <div className="page"><div className="page-heading"><div><span className="eyebrow">{formatEyebrow()}</span><h1>Good morning, Jordan <span className="heading-mark">✦</span></h1><p>Here’s what’s happening across your revenue engine today.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Capture a lead</button></div><div className="stat-grid"><Stat icon={<TrendingUp size={18} />} label="Total leads" value={leads.length.toString()} detail="All captured demand" color="blue" /><Stat icon={<Target size={18} />} label="Qualified" value={qualifiedCount.toString()} detail="Ready for sales" color="amber" /><Stat icon={<Sparkles size={18} />} label="Hot opportunities" value={hotLeads.length.toString()} detail="Need attention now" color="orange" /><Stat icon={<ArrowUpRight size={18} />} label="Win rate" value={`${winRate}%`} detail="Across all opportunities" color="green" /></div><div className="dashboard-grid"><section className="panel recent-panel"><div className="panel-heading"><div><h2>Recent leads</h2><p>New conversations entering your pipeline.</p></div><button className="text-button" onClick={() => onAdd()}>View all <ArrowUpRight size={14} /></button></div>{loading ? <LoadingRows /> : recentLeads.length === 0 ? <EmptyState onAdd={onAdd} /> : <div className="lead-list">{recentLeads.map((lead) => <LeadRow lead={lead} key={lead.id} onClick={() => onSelect(lead.id)} />)}</div>}</section><section className="panel activity-panel"><div className="panel-heading"><div><h2>Today’s focus</h2><p>Prioritized follow-up queue.</p></div><Clock3 size={18} className="muted-icon" /></div>{hotLeads.length === 0 ? <div className="focus-empty"><div className="soft-icon"><Target size={20} /></div><strong>Your focus list is clear</strong><span>Hot leads will show up here automatically.</span></div> : <div className="focus-list">{hotLeads.slice(0, 4).map((lead) => <button className="focus-row" key={lead.id} onClick={() => onSelect(lead.id)}><div className="avatar">{initials(lead.name)}</div><div><strong>{lead.name}</strong><span>{lead.company} · Score {lead.score}</span></div><ArrowUpRight size={15} /></button>)}</div>}<div className="insight-card"><Sparkles size={17} /><div><strong>Qualification insight</strong><p>{leads.length ? `${Math.round((qualifiedCount / leads.length) * 100)}% of your leads are currently sales-ready.` : 'Start capturing leads to unlock qualification insights.'}</p></div></div></section></div><section className="workflow-strip"><div className="workflow-intro"><span className="eyebrow">THE FLOW</span><h2>From first touch to closed won.</h2><p>One simple place to move every opportunity forward.</p></div>{['Capture', 'Qualify', 'Convert'].map((item, index) => <div className="workflow-step" key={item}><div className="workflow-number">0{index + 1}</div><div><strong>{item}</strong><span>{index === 0 ? 'Bring every inquiry in' : index === 1 ? 'Prioritize the right fit' : 'Keep momentum alive'}</span></div></div>)}</section></div>;
+  return <div className="page"><div className="page-heading"><div><span className="eyebrow">{formatEyebrow()}</span><h1>Welcome back <span className="heading-mark">✦</span></h1><p>Here’s what’s happening across your revenue engine today.</p></div><button className="primary-button" onClick={onAdd}><Plus size={17} /> Capture a lead</button></div><div className="stat-grid"><Stat icon={<TrendingUp size={18} />} label="Total leads" value={leads.length.toString()} detail="All captured demand" color="blue" /><Stat icon={<Target size={18} />} label="Qualified" value={qualifiedCount.toString()} detail="Ready for sales" color="amber" /><Stat icon={<Sparkles size={18} />} label="Hot opportunities" value={hotLeads.length.toString()} detail="Need attention now" color="orange" /><Stat icon={<ArrowUpRight size={18} />} label="Win rate" value={`${winRate}%`} detail="Across all opportunities" color="green" /></div><div className="dashboard-grid"><section className="panel recent-panel"><div className="panel-heading"><div><h2>Recent leads</h2><p>New conversations entering your pipeline.</p></div><button className="text-button" onClick={() => onAdd()}>View all <ArrowUpRight size={14} /></button></div>{loading ? <LoadingRows /> : recentLeads.length === 0 ? <EmptyState onAdd={onAdd} /> : <div className="lead-list">{recentLeads.map((lead) => <LeadRow lead={lead} key={lead.id} onClick={() => onSelect(lead.id)} />)}</div>}</section><section className="panel activity-panel"><div className="panel-heading"><div><h2>Today’s focus</h2><p>Prioritized follow-up queue.</p></div><Clock3 size={18} className="muted-icon" /></div>{hotLeads.length === 0 ? <div className="focus-empty"><div className="soft-icon"><Target size={20} /></div><strong>Your focus list is clear</strong><span>Hot leads will show up here automatically.</span></div> : <div className="focus-list">{hotLeads.slice(0, 4).map((lead) => <button className="focus-row" key={lead.id} onClick={() => onSelect(lead.id)}><div className="avatar">{initials(lead.name)}</div><div><strong>{lead.name}</strong><span>{lead.company} · Score {lead.score}</span></div><ArrowUpRight size={15} /></button>)}</div>}<div className="insight-card"><Sparkles size={17} /><div><strong>Qualification insight</strong><p>{leads.length ? `${Math.round((qualifiedCount / leads.length) * 100)}% of your leads are currently sales-ready.` : 'Start capturing leads to unlock qualification insights.'}</p></div></div></section></div><section className="workflow-strip"><div className="workflow-intro"><span className="eyebrow">THE FLOW</span><h2>From first touch to closed won.</h2><p>One simple place to move every opportunity forward.</p></div>{['Capture', 'Qualify', 'Convert'].map((item, index) => <div className="workflow-step" key={item}><div className="workflow-number">0{index + 1}</div><div><strong>{item}</strong><span>{index === 0 ? 'Bring every inquiry in' : index === 1 ? 'Prioritize the right fit' : 'Keep momentum alive'}</span></div></div>)}</section></div>;
 }
 
 function Stat({ icon, label, value, detail, color }: { icon: React.ReactNode; label: string; value: string; detail: string; color: string }) { return <div className="stat-card"><div className={`stat-icon ${color}`}>{icon}</div><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></div>; }
@@ -207,13 +181,13 @@ function Intake({ onCreated, compact = false }: { onCreated: (id: string) => Pro
     const cleaned = { ...form, name: form.name.trim(), email, company: form.company.trim(), role: form.role.trim(), phone: form.phone.trim(), message: form.message.trim().slice(0, 2000) };
     const score = Math.min(98, 42 + (cleaned.company ? 18 : 0) + (cleaned.role ? 12 : 0) + (cleaned.message.length > 40 ? 16 : 0) + (cleaned.phone ? 10 : 0));
     const priority: Priority = score >= 75 ? 'hot' : score >= 55 ? 'warm' : 'cold';
-    if (!isSupabaseConfigured) { setFormError('Connect a database to save leads.'); setSaving(false); return; }
-    const { data, error: insertError } = await supabase.from('leads').insert({ ...cleaned, score, priority, email_status: 'queued', next_follow_up_at: new Date(Date.now() + 86400000).toISOString() }).select('id').maybeSingle();
-    if (insertError || !data) { setFormError('This lead could not be saved. Please check the details and try again.'); setSaving(false); return; }
-    await supabase.from('lead_activities').insert({ lead_id: data.id, type: 'created', content: `Lead captured from ${cleaned.source}` });
-    await supabase.from('lead_activities').insert({ lead_id: data.id, type: 'qualification', content: `Scored ${score}/100 · ${priority} priority` });
-    await supabase.from('notifications').insert({ lead_id: data.id, type: 'new_lead', title: 'New lead captured', content: `${cleaned.name} from ${cleaned.company} is ready for review.` });
-    setForm({ name: '', email: '', company: '', role: '', phone: '', source: 'Website', message: '' }); setSaving(false); await onCreated(data.id);
+    const now = new Date().toISOString();
+    const leadId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
+    store.addLead({ id: leadId, ...cleaned, stage: 'new', score, priority, owner: '', email_status: 'queued', last_contacted_at: null, created_at: now, updated_at: now, next_follow_up_at: new Date(Date.now() + 86400000).toISOString() });
+    store.addActivity({ lead_id: leadId, type: 'created', content: `Lead captured from ${cleaned.source}` });
+    store.addActivity({ lead_id: leadId, type: 'qualification', content: `Scored ${score}/100 · ${priority} priority` });
+    store.addNotification({ lead_id: leadId, type: 'new_lead', title: 'New lead captured', content: `${cleaned.name} from ${cleaned.company} is ready for review.`, is_read: false });
+    setForm({ name: '', email: '', company: '', role: '', phone: '', source: 'Website', message: '' }); setSaving(false); await onCreated(leadId);
   };
   return <div className={compact ? 'intake compact-intake' : 'page intake-page'}>{!compact && <div className="page-heading"><div><span className="eyebrow">LEAD INTAKE</span><h1>Turn interest into an opportunity.</h1><p>Capture the details your team needs to make the next conversation count.</p></div><div className="intake-badge"><Sparkles size={16} /> Auto-qualification on</div></div>}<form className="intake-card" onSubmit={submit}><div className="form-intro"><div className="form-icon"><Target size={20} /></div><div><h2>New lead details</h2><p>We’ll automatically score this lead and create a follow-up task.</p></div></div><div className="form-grid"><label>Full name<input required value={form.name} onChange={(event) => change('name', event.target.value)} placeholder="e.g. Alex Morgan" /></label><label>Work email<input required type="email" value={form.email} onChange={(event) => change('email', event.target.value)} placeholder="alex@company.com" /></label><label>Company<input required value={form.company} onChange={(event) => change('company', event.target.value)} placeholder="Company name" /></label><label>Role <span className="optional">optional</span><input value={form.role} onChange={(event) => change('role', event.target.value)} placeholder="e.g. Head of Growth" /></label><label>Phone <span className="optional">optional</span><input value={form.phone} onChange={(event) => change('phone', event.target.value)} placeholder="+1 555 000 0000" /></label><label>Source<select value={form.source} onChange={(event) => change('source', event.target.value)}><option>Website</option><option>Referral</option><option>LinkedIn</option><option>Event</option><option>Outbound</option></select></label><label className="full-field">What are they looking for? <span className="optional">optional</span><textarea value={form.message} onChange={(event) => change('message', event.target.value)} placeholder="Capture the problem, timeline, or anything useful for the first conversation..." rows={compact ? 3 : 4} /></label></div>{formError && <div className="form-error">{formError}</div>}<div className="form-footer"><span><Check size={15} /> Saved to your CRM instantly</span><button className="primary-button" disabled={saving}>{saving ? 'Saving lead...' : 'Create lead'} <ArrowUpRight size={16} /></button></div></form></div>;
 }
