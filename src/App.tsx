@@ -140,7 +140,14 @@ function App() {
         {activeTab === 'overview' && <Overview leads={leads} qualifiedCount={qualifiedCount} winRate={winRate} loading={loading} onSelect={(id) => { setSelectedLeadId(id); setActiveTab('pipeline'); }} onAdd={() => setShowNewLead(true)} />}
         {activeTab === 'pipeline' && <Pipeline leads={filteredLeads} selectedLead={selectedLead} activities={activities} search={search} onSelect={setSelectedLeadId} onStage={updateStage} onEmail={openEmail} onNote={addNote} />}
         {activeTab === 'intake' && <Intake onCreated={async (id) => { await refresh(); setSelectedLeadId(id); setActiveTab('pipeline'); notify('Lead captured and added to the pipeline.'); }} />}
-      </main>
+              </main>
+      <footer style={{ borderTop: '1px solid #e6ecec', background: '#fff', padding: '16px 20px', textAlign: 'center', fontSize: 12, color: '#829094' }}>
+        <span style={{ fontWeight: 700, color: '#273b42' }}>Contact Velcora</span>
+        {' · '}
+        <a href="mailto:velcora.ai@gmail.com" style={{ color: '#56827e', textDecoration: 'none' }}>velcora.ai@gmail.com</a>
+        {' · '}
+        <a href="tel:+919138278584" style={{ color: '#56827e', textDecoration: 'none' }}>+919138278584</a>
+      </footer>
       {showNewLead && <div className="modal-backdrop" onMouseDown={() => setShowNewLead(false)}><div className="modal-card" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">CAPTURE DEMAND</span><h2>Add a new lead</h2></div><button onClick={() => setShowNewLead(false)} className="close-button"><X size={18} /></button></div><Intake compact onCreated={async (id) => { setShowNewLead(false); await refresh(); setSelectedLeadId(id); setActiveTab('pipeline'); notify('Lead captured and added to the pipeline.'); }} /></div></div>}
       {toast && <div className="toast"><Check size={16} /> {toast}</div>}
     </div>
